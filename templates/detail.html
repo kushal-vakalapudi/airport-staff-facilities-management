@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Skyport{% endblock %}
+{% block breadcrumb %}<a href="{{ url_for('module_page', slug=detail_type if detail_type == 'staff' else 'facilities') }}">{{ 'Staff' if detail_type == 'staff' else 'Facilities' }}</a> <span class="crumb-divider">/</span> Details{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">{{ detail_type|upper }} PROFILE</p><h1>{{ title }}</h1><p class="page-subtitle">{{ subtitle }}</p></div>
+  <div class="d-flex gap-2"><a class="btn btn-outline-primary" href="{{ url_for('edit_record', slug=detail_type if detail_type == 'staff' else 'facilities', record_id=record.StaffID if detail_type == 'staff' else record.FacilityID) }}"><i class="bi bi-pencil-square me-2"></i>Edit</a><a class="btn btn-light" href="{{ url_for('module_page', slug=detail_type if detail_type == 'staff' else 'facilities') }}">Back</a></div>
+</div>
+<section class="panel profile-panel">
+  {% if detail_type == 'staff' %}
+  <div class="profile-item"><span>Department</span><strong>{{ record.Department }}</strong></div><div class="profile-item"><span>Designation</span><strong>{{ record.Designation }}</strong></div><div class="profile-item"><span>Email</span><strong>{{ record.Email }}</strong></div><div class="profile-item"><span>Phone</span><strong>{{ record.Phone|display }}</strong></div><div class="profile-item"><span>Shift</span><strong>{{ record.Shift }}</strong></div><div class="profile-item"><span>Status</span><strong><span class="status-badge status-{{ record.StaffStatus|lower }}">{{ record.StaffStatus }}</span></strong></div>
+  {% else %}
+  <div class="profile-item"><span>Type</span><strong>{{ record.FacilityType }}</strong></div><div class="profile-item"><span>Location</span><strong>{{ record.Location }}</strong></div><div class="profile-item"><span>Capacity</span><strong>{{ record.Capacity }}</strong></div><div class="profile-item"><span>Availability</span><strong><span class="status-badge status-{{ record.AvailabilityStatus|lower }}">{{ record.AvailabilityStatus }}</span></strong></div>
+  {% endif %}
+</section>
+<div class="row g-3 mt-1">
+  {% for section in history %}
+  <div class="col-xl-6"><section class="panel h-100">
+    <div class="panel-heading"><div><h2>{{ section.title }}</h2><p>{{ section.rows|length }} record{% if section.rows|length != 1 %}s{% endif %}</p></div></div>
+    {% if section.rows %}
+    <div class="table-responsive"><table class="table data-table align-middle mb-0"><thead><tr>{% for col in section.columns %}<th>{{ col }}</th>{% endfor %}</tr></thead><tbody>
+      {% for row in section.rows %}<tr>{% for col in section.columns %}<td>{{ row[col]|display }}</td>{% endfor %}</tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}<div class="empty-state compact"><i class="bi bi-inbox"></i><span>No records yet.</span></div>{% endif %}
+  </section></div>
+  {% endfor %}
+</div>
+{% endblock %}

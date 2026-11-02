@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Overview · Skyport{% endblock %}
+{% block breadcrumb %}Overview <span class="crumb-divider">/</span> Dashboard{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">AIRPORT OPERATIONS / STAFF SERVICES</p>
+    <h1>Good day, Administrator</h1>
+    <p class="page-subtitle">A live view of staff facilities, resources, and activity.</p>
+  </div>
+  <div class="today-chip"><i class="bi bi-calendar3"></i> {{ today }}</div>
+</div>
+<div class="row g-3 stat-grid">
+  {% set cards = [
+    ('Total staff', stats.total_staff, 'people-fill', 'blue', 'staff'),
+    ('Active staff', stats.active_staff, 'person-check-fill', 'green', 'staff'),
+    ('Facilities', stats.total_facilities, 'building-fill', 'violet', 'facilities'),
+    ('Available facilities', stats.available_facilities, 'check-circle-fill', 'green', 'facilities'),
+    ('Bookings', stats.total_bookings, 'calendar2-check-fill', 'amber', 'bookings'),
+    ('Confirmed bookings', stats.confirmed_bookings, 'bookmark-check-fill', 'blue', 'bookings'),
+    ('Available lockers', stats.available_lockers, 'lock-fill', 'green', 'lockers'),
+    ('Allocated lockers', stats.allocated_lockers, 'key-fill', 'violet', 'locker-allocations'),
+    ('Active parking', stats.active_parking, 'car-front-fill', 'amber', 'parking'),
+    ('Meal schedules', stats.meal_schedules, 'cup-hot-fill', 'blue', 'meals')
+  ] %}
+  {% for label, value, icon, color, href in cards %}
+  <div class="col-6 col-xl-2 col-md-4">
+    <a class="stat-card" href="{{ url_for('module_page', slug=href) }}">
+      <div class="stat-icon {{ color }}"><i class="bi bi-{{ icon }}"></i></div>
+      <div class="stat-value">{{ value }}</div>
+      <div class="stat-label">{{ label }}</div>
+      <i class="bi bi-arrow-up-right stat-arrow"></i>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+<div class="row g-3 mt-1">
+  <div class="col-xl-7">
+    <section class="panel h-100">
+      <div class="panel-heading"><div><h2>Facility access</h2><p>Recorded access events by facility</p></div><a class="text-link" href="{{ url_for('module_page', slug='access') }}">View history <i class="bi bi-arrow-right"></i></a></div>
+      <div class="chart-wrap"><canvas id="accessChart" aria-label="Access counts by facility"></canvas></div>
+    </section>
+  </div>
+  <div class="col-xl-5">
+    <section class="panel h-100">
+      <div class="panel-heading"><div><h2>Booking status</h2><p>Current booking distribution</p></div><a class="text-link" href="{{ url_for('module_page', slug='bookings') }}">Bookings <i class="bi bi-arrow-right"></i></a></div>
+      <div class="chart-wrap chart-wrap-small"><canvas id="bookingChart" aria-label="Bookings by status"></canvas></div>
+    </section>
+  </div>
+  <div class="col-xl-6">
+    <section class="panel h-100">
+      <div class="panel-heading"><div><h2>Staff by department</h2><p>Workforce distribution</p></div><a class="text-link" href="{{ url_for('module_page', slug='staff') }}">View staff <i class="bi bi-arrow-right"></i></a></div>
+      <div class="chart-wrap"><canvas id="staffChart" aria-label="Staff by department"></canvas></div>
+    </section>
+  </div>
+  <div class="col-xl-6">
+    <section class="panel h-100">
+      <div class="panel-heading"><div><h2>Facility types</h2><p>Facilities grouped by type</p></div><a class="text-link" href="{{ url_for('module_page', slug='facilities') }}">View facilities <i class="bi bi-arrow-right"></i></a></div>
+      <div class="chart-wrap"><canvas id="facilityChart" aria-label="Facilities by type"></canvas></div>
+    </section>
+  </div>
+  <div class="col-12">
+    <section class="panel">
+      <div class="panel-heading"><div><h2>Recent bookings</h2><p>Latest staff facility reservations</p></div><a class="text-link" href="{{ url_for('module_page', slug='bookings') }}">See all <i class="bi bi-arrow-right"></i></a></div>
+      {% if recent_bookings %}
+      <div class="table-responsive"><table class="table data-table align-middle mb-0"><thead><tr><th>Staff</th><th>Facility</th><th>Date</th><th>Start</th><th>Status</th></tr></thead><tbody>
+      {% for row in recent_bookings %}<tr><td class="fw-semibold">{{ row.StaffName }}</td><td>{{ row.FacilityName }}</td><td>{{ row.BookingDate|display }}</td><td>{{ row.StartTime|display }}</td><td><span class="status-badge">{{ row.BookingStatus }}</span></td></tr>{% endfor %}
+      </tbody></table></div>
+      {% else %}<div class="empty-state"><i class="bi bi-calendar-x"></i><strong>No bookings yet</strong><span>New reservations will appear here.</span></div>{% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+  const dashboardCharts = {{ charts|tojson }};
+  window.renderDashboardCharts(dashboardCharts);
+</script>
+{% endblock %}

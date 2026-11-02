@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Edit {{ module.title }} · Skyport{% endblock %}
+{% block breadcrumb %}<a href="{{ url_for('module_page', slug=slug) }}">{{ module.title }}</a> <span class="crumb-divider">/</span> Edit record{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">RECORD MANAGEMENT</p><h1>Edit {{ module.title|lower|singular }}</h1><p class="page-subtitle">Update this record. Linked data and history are retained.</p></div><a class="btn btn-light" href="{{ url_for('module_page', slug=slug) }}"><i class="bi bi-arrow-left me-2"></i>Back to list</a></div>
+<div class="row"><div class="col-lg-8 col-xl-6"><section class="panel">
+  <form method="post" action="{{ url_for('update_record', slug=slug, record_id=row[module.pk]) }}" class="needs-validation" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for name, label, kind, required in module.fields %}
+    <div class="mb-3">
+      <label class="form-label" for="field-{{ name }}">{{ label }}{% if required %}<span class="required-mark"> *</span>{% endif %}</label>
+      {% if kind.startswith('select:') %}
+      <select class="form-select" name="{{ name }}" id="field-{{ name }}" {% if required %}required{% endif %}>{% for choice in kind.split(':')[1].split('|') %}<option value="{{ choice }}" {% if row[name]|string == choice %}selected{% endif %}>{{ choice|replace('_',' ')|title }}</option>{% endfor %}</select>
+      {% elif kind.startswith('ref:') %}
+      {% set ref_name = kind.split(':')[1] %}
+      <select class="form-select" name="{{ name }}" id="field-{{ name }}" {% if required %}required{% endif %}><option value="">Choose…</option>{% for option in options.get(ref_name, []) %}<option value="{{ option.id }}" {% if row[name]|int == option.id %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select>
+      {% else %}
+      <input class="form-control" type="{{ kind }}" name="{{ name }}" id="field-{{ name }}" value="{{ row[name]|input_value(kind) }}" {% if kind == 'number' %}min="1"{% endif %} {% if required %}required{% endif %}>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="d-flex gap-2"><button class="btn btn-primary" type="submit"><i class="bi bi-check2 me-2"></i>Save changes</button><a class="btn btn-light" href="{{ url_for('module_page', slug=slug) }}">Cancel</a></div>
+  </form>
+</section></div></div>
+{% endblock %}

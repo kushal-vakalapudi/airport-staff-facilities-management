@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Database unavailable · Skyport{% endblock %}
+{% block content %}
+<div class="error-page">
+  <div class="error-code"><i class="bi bi-database-exclamation"></i></div>
+  <h1>Database connection unavailable</h1>
+  <p>{{ message }}</p>
+  <div class="database-help">
+    <strong>Check your local setup</strong>
+    <ol>
+      <li>Make sure MySQL is running.</li>
+      <li>Copy <code>.env.example</code> to <code>.env</code>.</li>
+      <li>Set your MySQL username and password in <code>.env</code>.</li>
+      <li>Confirm that the existing database and ten tables are present.</li>
+    </ol>
+  </div>
+</div>
+{% endblock %}

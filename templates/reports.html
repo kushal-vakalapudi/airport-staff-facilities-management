@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Reports · Skyport{% endblock %}
+{% block breadcrumb %}Workspace <span class="crumb-divider">/</span> Reports{% endblock %}
+{% block content %}
+<div class="page-heading"><div><p class="eyebrow">DATA & INSIGHTS</p><h1>Reports</h1><p class="page-subtitle">Operational summaries generated from current MySQL records.</p></div><span class="today-chip"><i class="bi bi-database"></i> Live data</span></div>
+<div class="report-grid">
+  {% for report in reports %}
+  <section class="panel report-panel">
+    <div class="panel-heading"><div><h2>{{ report.title }}</h2><p>{{ report.rows|length }} result{% if report.rows|length != 1 %}s{% endif %}</p></div></div>
+    {% if report.rows %}
+    <div class="table-responsive report-table"><table class="table data-table align-middle mb-0">
+      <thead><tr>{% for column in report.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in report.rows %}<tr>{% for column in report.columns %}<td>{{ row[column]|display }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<div class="empty-state compact"><i class="bi bi-inbox"></i><span>No matching records.</span></div>{% endif %}
+  </section>
+  {% endfor %}
+</div>
+{% endblock %}

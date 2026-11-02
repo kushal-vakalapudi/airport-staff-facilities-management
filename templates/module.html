@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ module.title }} · Skyport{% endblock %}
+{% block breadcrumb %}Workspace <span class="crumb-divider">/</span> {{ module.title }}{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div><p class="eyebrow">MANAGEMENT MODULE</p><h1>{{ module.title }}</h1><p class="page-subtitle">Browse and manage {{ module.title|lower }} using live MySQL records.</p></div>
+  <a class="btn btn-outline-primary" href="{{ url_for('export_csv', slug=slug) }}"><i class="bi bi-download me-2"></i>Export CSV</a>
+</div>
+<div class="row g-4 align-items-start">
+  <div class="col-xl-8 order-2 order-xl-1">
+    <section class="panel">
+      <div class="panel-heading"><div><h2>{{ module.title }} records</h2><p>{{ rows|length }} result{% if rows|length != 1 %}s{% endif %}{% if search %} for “{{ search }}”{% endif %}</p></div></div>
+      <form class="search-bar" method="get" action="{{ url_for('module_page', slug=slug) }}">
+        <i class="bi bi-search"></i><input name="q" value="{{ search }}" class="form-control" placeholder="Search {{ module.title|lower }}..." aria-label="Search">
+        {% if search %}<a class="btn btn-light" href="{{ url_for('module_page', slug=slug) }}">Clear</a>{% endif %}
+        <button class="btn btn-primary" type="submit">Search</button>
+      </form>
+      {% if rows %}
+      <div class="table-responsive"><table class="table data-table align-middle mb-0">
+        <thead><tr>{% for key, label in module.columns %}<th>{{ label }}</th>{% endfor %}<th class="text-end">Actions</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+        <tr>
+          {% for key, label in module.columns %}
+          <td>{% if key in ['StaffStatus','AvailabilityStatus','BookingStatus','AllocationStatus','Status'] %}<span class="status-badge status-{{ row[key]|lower }}">{{ row[key] }}</span>{% else %}{{ row[key]|display }}{% endif %}</td>
+          {% endfor %}
+          <td class="text-end text-nowrap">
+            {% if slug == 'staff' %}<a class="icon-action" href="{{ url_for('staff_detail', staff_id=row.StaffID) }}" title="View staff details"><i class="bi bi-eye"></i></a>{% endif %}
+            {% if slug == 'facilities' %}<a class="icon-action" href="{{ url_for('facility_detail', facility_id=row.FacilityID) }}" title="View facility details"><i class="bi bi-eye"></i></a>{% endif %}
+            {% if slug not in ['access','bookings','locker-allocations'] %}
+            <a class="icon-action" href="{{ url_for('edit_record', slug=slug, record_id=row[module.pk]) }}" title="Edit"><i class="bi bi-pencil-square"></i></a>
+            {% endif %}
+            {% if slug == 'lockers' and row.Status == 'AVAILABLE' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.LockerID, action='unavailable') }}" data-confirm="Mark this locker unavailable?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-warning" title="Mark unavailable"><i class="bi bi-lock"></i></button></form>
+            {% elif slug == 'lockers' and row.Status == 'UNAVAILABLE' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.LockerID, action='available') }}" data-confirm="Make this locker available?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-success" title="Make available"><i class="bi bi-unlock"></i></button></form>
+            {% endif %}
+            {% if slug == 'staff' and row.StaffStatus == 'ACTIVE' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.StaffID, action='deactivate') }}" data-confirm="Deactivate this staff member? Related records will be retained."><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-warning" title="Deactivate"><i class="bi bi-person-dash"></i></button></form>
+            {% endif %}
+            {% if slug == 'bookings' and row.BookingStatus in ['PENDING','CONFIRMED'] %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.BookingID, action='cancel') }}" data-confirm="Cancel this booking?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-danger" title="Cancel"><i class="bi bi-x-circle"></i></button></form>
+            {% endif %}
+            {% if slug == 'bookings' and row.BookingStatus == 'CONFIRMED' and row.IsCompletable %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.BookingID, action='complete') }}" data-confirm="Mark this booking completed?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-success" title="Complete"><i class="bi bi-check-circle"></i></button></form>
+            {% endif %}
+            {% if slug == 'parking' and row.AllocationStatus == 'ACTIVE' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.ParkingID, action='release') }}" data-confirm="Release this parking allocation?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-danger" title="Release"><i class="bi bi-box-arrow-right"></i></button></form>
+            {% endif %}
+            {% if slug == 'locker-allocations' and row.Status == 'ACTIVE' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.AllocationID, action='return') }}" data-confirm="Record return of this locker?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-success" title="Return locker"><i class="bi bi-box-arrow-in-left"></i></button></form>
+            {% endif %}
+            {% if slug == 'meals' %}
+            <form class="inline-form" method="post" action="{{ url_for('record_action', slug=slug, record_id=row.MealID, action='delete') }}" data-confirm="Delete this meal schedule?"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="icon-action text-danger" title="Delete schedule"><i class="bi bi-trash3"></i></button></form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table></div>
+      {% else %}<div class="empty-state"><i class="bi bi-inbox"></i><strong>No records found</strong><span>Try changing your search or add the first record.</span></div>{% endif %}
+    </section>
+  </div>
+  <div class="col-xl-4 order-1 order-xl-2">
+    <section class="panel form-panel">
+      <div class="panel-heading"><div><h2>Add {{ module.title|lower|singular }}</h2><p>Fields marked required must be filled in.</p></div><span class="add-icon"><i class="bi bi-plus-lg"></i></span></div>
+      <form method="post" action="{{ url_for('add_record', slug=slug) }}" class="needs-validation" novalidate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% for name, label, kind, required in module.fields %}
+        <div class="mb-3">
+          <label class="form-label" for="field-{{ name }}">{{ label }}{% if required %}<span class="required-mark"> *</span>{% endif %}</label>
+          {% if kind.startswith('select:') %}
+          <select class="form-select" name="{{ name }}" id="field-{{ name }}" {% if required %}required{% endif %}><option value="">Choose…</option>{% for choice in kind.split(':')[1].split('|') %}<option value="{{ choice }}">{{ choice|replace('_',' ')|title }}</option>{% endfor %}</select>
+          {% elif kind.startswith('ref:') %}
+          {% set ref_name = kind.split(':')[1] %}
+          <select class="form-select" name="{{ name }}" id="field-{{ name }}" {% if required %}required{% endif %}><option value="">Choose…</option>{% for option in options.get(ref_name, []) %}<option value="{{ option.id }}">{{ option.label }}</option>{% endfor %}</select>
+          {% else %}
+          <input class="form-control" type="{{ kind }}" name="{{ name }}" id="field-{{ name }}" {% if kind == 'number' %}min="1"{% endif %} {% if required %}required{% endif %}>
+          {% endif %}
+          <div class="invalid-feedback">Please provide a valid {{ label|lower }}.</div>
+        </div>
+        {% endfor %}
+        {% if not module.fields %}<p>No create form is configured for this module.</p>{% endif %}
+        <button class="btn btn-primary w-100" type="submit"><i class="bi bi-plus-circle me-2"></i>Add record</button>
+      </form>
+    </section>
+    {% if slug == 'access' %}<div class="info-callout mt-3"><i class="bi bi-info-circle"></i><span>Access entries are simulated or manually recorded; this application is not connected to airport access-control hardware.</span></div>{% endif %}
+  </div>
+</div>
+{% endblock %}
