@@ -1,6 +1,6 @@
 # Airport Staff Facilities Management System
 
-A Flask and MySQL web application for managing airport employee facilities and resources. The project is located in its own `airport_staff_facilities` folder so it does not overwrite the unrelated Lab 6 coverage exercise.
+A Flask web application using MySQL for airport employee facility records and MongoDB to mirror frontend changes and store an activity log.
 
 ## What it manages
 
@@ -15,12 +15,17 @@ A Flask and MySQL web application for managing airport employee facilities and r
 - Training-room details linked to an existing training facility
 - Cafeteria records and meal schedules
 - Dashboard, charts, operational reports, and CSV exports
+- Recent activity history stored in MongoDB and a local plain-text audit file
 
-The application connects to the existing `airport_staff_facilities_db` database. It does not create, drop, reset, or seed database tables. Do not rerun the sample `INSERT` section from the SQL reference against an already populated database.
+MySQL remains the source of truth for the existing `airport_staff_facilities_db` records. All SQL statements and parameterized query builders are centralized in [`sql_queries.py`](./sql_queries.py); `app.py` imports and executes them directly with the MySQL connector. No separate database API is used. The app does not create, drop, reset, or seed MySQL tables. When `MONGODB_URI` is configured, the embedded PyMongo driver mirrors each successful add, edit, and supported action to the `management_records` MongoDB collection, and writes a separate event to `activity_logs`. Mirrored records contain the changed MySQL row, so fields such as staff contact details are also copied; configure MongoDB access accordingly. Existing MySQL records are mirrored when they are next changed in the app, not by a bulk import. MongoDB creates its configured database and collections when the first successful write occurs. Do not rerun the sample `INSERT` section from the SQL reference against an already populated database.
+
+Whether or not MongoDB is configured, every successful create, update, and delete/action is appended to the plain-text `activity_audit.log` file in the project folder. This lets you inspect the audit trail without installing MongoDB. If `MONGODB_URI` is blank, the Activity log page clearly identifies that it is showing the local file and not a live MongoDB connection. When a real MongoDB URI is configured, events are written to both the local audit file and the MongoDB collection.
 
 ## Database design
 
-The application uses the existing ten tables:
+The existing ten MySQL tables and their relationships are unchanged. With a real MongoDB connection, the app adds a `management_records` collection in the `airport_staff_facilities` database. Each document has a stable `_id` (`module:record_id`), module/table metadata, a `synced_at` timestamp, and the current columns from that MySQL row. Additions and edits are upserted; a deleted meal schedule is removed from this collection. Locker allocations and returns also mirror the affected locker status. The separate `activity_logs` collection stores the operation, module, record ID, and timestamp. Use **MongoDB Compass** to browse the `airport_staff_facilities` database and open `management_records`; use the **Activity log** page or dashboard to review event history. Without MongoDB, MySQL behavior remains available and audit events go to `activity_audit.log`; the app displays a warning after a change that could not be mirrored.
+
+To present the SQL implementation, open `sql_queries.py`. It contains the `SELECT` statements, `INSERT` and `UPDATE` builders, action `UPDATE`/`DELETE` statements, and report queries. `app.py` contains the Flask routes and calls the named statements from that module.
 
 | Table | Purpose |
 |---|---|
@@ -41,34 +46,35 @@ Foreign-key relationships follow the existing schema: access/bookings/parking re
 
 The easiest way is to use the included command scripts:
 
-1. Open File Explorer and go to the `airport_staff_facilities` folder.
-2. Double-click `setup.cmd`. It creates a virtual environment and installs Flask, the MySQL connector, and dotenv. It creates `.env` from `.env.example` only if `.env` does not already exist.
-3. Right-click `.env`, choose **Open with → Notepad**, then enter your MySQL login. For example, set `DB_USER=root` and set `DB_PASSWORD` to the password for your MySQL account. Keep the existing database name `airport_staff_facilities_db`. Save and close Notepad.
-4. Double-click `run.cmd`.
-5. Open **http://127.0.0.1:5000**. Leave the command window open while using the application. Press **Ctrl+C** in that window to stop the server.
+1. Open File Explorer and go to the folder containing `app.py`.
+2. Double-click `setup.cmd`. It creates a virtual environment and installs Flask, the MySQL connector, PyMongo, and dotenv. It creates `.env` from `.env.example` only if `.env` does not already exist.
+3. Make sure MySQL 8.0 is running and the existing ten tables are present in `airport_staff_facilities_db`.
+4. To show frontend changes in MongoDB Compass, set `MONGODB_URI` in `.env` to the same connection string you use in Compass. In MongoDB Atlas, copy the connection string from **Connect → Drivers** (replace its username, password, and cluster placeholders). For a local MongoDB server, use `mongodb://localhost:27017`. Set your Atlas IP access and database user in Atlas if required. Leave the URI blank only if you want to use MySQL and the local audit file without MongoDB.
+5. Edit `.env` with your MySQL login (`DB_USER`, `DB_PASSWORD`) and keep `DB_NAME=airport_staff_facilities_db`. Save and close it.
+6. Double-click `run.cmd`, then open **http://127.0.0.1:5000**. Leave the command window open while using the application. Press **Ctrl+C** in that window to stop the server.
 
 You can also run the setup from a regular Command Prompt:
 
 ```bat
-cd /d "C:\Users\Vakalapudi kushal\Downloads\L6_L7_12_cloud_storage_tier-main\L6_L7_12_cloud_storage_tier-main\Lab 6\airport_staff_facilities"
+cd /d "C:\path\to\airport-staff-facilities-management-main"
 setup.cmd
 ```
 
 After editing `.env`, start the app with:
 
 ```bat
-cd /d "C:\Users\Vakalapudi kushal\Downloads\L6_L7_12_cloud_storage_tier-main\L6_L7_12_cloud_storage_tier-main\Lab 6\airport_staff_facilities"
+cd /d "C:\path\to\airport-staff-facilities-management-main"
 run.cmd
 ```
 
-Confirm MySQL 8.0 is running and the ten tables exist in `airport_staff_facilities_db`. The web app connects using the `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME` values from `.env`. This application will not initialize or alter the database.
+The web app connects directly to MySQL using the settings `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, and `DB_NAME`. MongoDB uses the embedded PyMongo driver with `MONGODB_URI`, `MONGODB_DATABASE`, `MONGODB_COLLECTION`, and `MONGODB_RECORDS_COLLECTION`. A MongoDB outage does not block MySQL record changes; the page displays a warning and successful changes remain in the plain-text audit file. In Compass, connect using the same URI, then open database `airport_staff_facilities` and collection `management_records`.
 
 ## Manual setup on Windows PowerShell
 
 Open PowerShell in this project folder:
 
 ```powershell
-Set-Location "C:\Users\Vakalapudi kushal\Downloads\L6_L7_12_cloud_storage_tier-main\L6_L7_12_cloud_storage_tier-main\Lab 6\airport_staff_facilities"
+Set-Location "C:\path\to\airport-staff-facilities-management-main"
 ```
 
 The application will not initialize or alter the database.
@@ -89,14 +95,14 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
-Create your private configuration file and edit it with your actual MySQL login:
+Create your private configuration file and edit it with your actual MySQL login and, if enabled, MongoDB URI:
 
 ```powershell
 Copy-Item .env.example .env
 notepad .env
 ```
 
-Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and replace `SECRET_KEY` with a long random value. `.env` is ignored by Git and must not be shared. The database user needs normal `SELECT`, `INSERT`, `UPDATE`, and `DELETE` permissions for the project tables and access to the existing stored routines if you use them separately.
+Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and replace `SECRET_KEY` with a long random value. Set `MONGODB_URI` to your Atlas or local MongoDB connection string; this is where you put the connection string for the app. Use the same URI in MongoDB Compass to inspect the data. The defaults create/use database `airport_staff_facilities`, records collection `management_records`, and activity collection `activity_logs`. `.env` is ignored by Git and must not be shared. The MySQL user needs normal `SELECT`, `INSERT`, `UPDATE`, and `DELETE` permissions for the project tables.
 
 Start the web application:
 
@@ -116,6 +122,13 @@ Open **http://127.0.0.1:5000**. Stop the local development server with **Ctrl+C*
 6. Allocate available lockers from **Locker allocations**. Return actions update the allocation; the existing trigger updates the locker status.
 7. Release parking using its action; this retains the record and sets its end date.
 8. Use **Reports** for live summaries and **Export CSV** on a module to download its current records.
+9. Use **Activity log** to review successful data changes. In MongoDB Compass, browse `airport_staff_facilities.management_records` to see current documents for records changed through the app; `activity_logs` shows the event history. With no MongoDB configured, open `activity_audit.log` in the project folder to show the plain-text event entries.
+
+To open the audit file from Command Prompt after making changes:
+
+```bat
+notepad activity_audit.log
+```
 
 ## Validation and tests
 

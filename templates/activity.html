@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Activity log · Skyport{% endblock %}
+{% block breadcrumb %}Administration <span class="crumb-divider">/</span> Activity log{% endblock %}
+{% block content %}
+<div class="page-heading">
+  <div>
+    <p class="eyebrow">MONGODB DOCUMENT STORE</p>
+    <h1>Activity log</h1>
+    <p class="page-subtitle">Recent successful changes recorded separately from MySQL operational data.</p>
+  </div>
+  <span class="today-chip"><i class="bi bi-database"></i> Activity source: {{ mongo_status }}</span>
+</div>
+{% if mongo_status == "File log (MongoDB not configured)" %}
+<div class="alert alert-info" role="status">MongoDB is not configured. Successful changes are still recorded in the plain-text file <code>activity_audit.log</code> in your project folder. This file is a local audit trail, not a MongoDB database.</div>
+{% elif mongo_status == "File log (MongoDB unavailable)" %}
+<div class="alert alert-warning" role="status">MongoDB could not be reached. Showing the local plain-text audit file <code>activity_audit.log</code> instead.</div>
+{% elif mongo_status in ("File log unavailable", "MongoDB and file log unavailable") %}
+<div class="alert alert-danger" role="alert">Could not read the activity log file. Check that <code>activity_audit.log</code> in the project folder is accessible.</div>
+{% endif %}
+<section class="panel">
+  {% if events %}
+  <div class="table-responsive"><table class="table data-table align-middle mb-0">
+    <thead><tr><th>Operation</th><th>Module</th><th>Record ID</th><th>Time (UTC)</th></tr></thead>
+    <tbody>{% for event in events %}
+      <tr>
+        <td class="fw-semibold">{{ event.operation|title }}</td>
+        <td>{{ event.module }}</td>
+        <td>{{ event.record_id if event.record_id is not none else "—" }}</td>
+        <td>{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+      </tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% elif mongo_status == "Connected" %}
+  <div class="empty-state"><i class="bi bi-journal"></i><strong>No activity recorded yet</strong><span>Successful changes will appear here.</span></div>
+  {% else %}
+  <div class="empty-state"><i class="bi bi-database"></i><strong>Activity history is unavailable</strong><span>Configure and start MongoDB to store activity events.</span></div>
+  {% endif %}
+</section>
+{% endblock %}

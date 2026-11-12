@@ -3,12 +3,16 @@ import io
 import logging
 import os
 import re
+import threading
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from functools import wraps
 from secrets import token_urlsafe
 
 import mysql.connector
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError
 from dotenv import load_dotenv
 from flask import (
     Flask,
@@ -21,6 +25,7 @@ from flask import (
     url_for,
 )
 from mysql.connector import Error as MySQLError
+import sql_queries
 
 load_dotenv()
 
@@ -32,6 +37,8 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+mongo_client = None
+activity_file_lock = threading.Lock()
 
 STAFF_FIELDS = [
     ("Name", "Name", "text", True),
@@ -91,7 +98,7 @@ MODULES = {
         "pk": "StaffID",
         "fields": STAFF_FIELDS,
         "columns": [("StaffID", "ID"), ("Name", "Name"), ("Department", "Department"), ("Designation", "Designation"), ("Email", "Email"), ("Shift", "Shift"), ("StaffStatus", "Status")],
-        "query": "SELECT StaffID, Name, Department, Designation, Email, Phone, Shift, StaffStatus FROM STAFF ORDER BY StaffID DESC",
+        "query": sql_queries.MODULE_QUERIES["staff"],
         "search": ["Name", "Department", "Email"],
     },
     "facilities": {
@@ -101,7 +108,7 @@ MODULES = {
         "pk": "FacilityID",
         "fields": FACILITY_FIELDS,
         "columns": [("FacilityID", "ID"), ("FacilityName", "Facility"), ("FacilityType", "Type"), ("Location", "Location"), ("Capacity", "Capacity"), ("AvailabilityStatus", "Availability")],
-        "query": "SELECT FacilityID, FacilityName, FacilityType, Location, Capacity, AvailabilityStatus FROM STAFF_FACILITY ORDER BY FacilityID DESC",
+        "query": sql_queries.MODULE_QUERIES["facilities"],
         "search": ["FacilityName", "Location", "FacilityType"],
     },
     "access": {
@@ -116,7 +123,7 @@ MODULES = {
             ("AccessTime", "Access time", "time", True),
         ],
         "columns": [("AccessID", "ID"), ("StaffName", "Staff"), ("FacilityName", "Facility"), ("AccessDate", "Date"), ("AccessTime", "Time")],
-        "query": "SELECT a.AccessID, a.StaffID, a.FacilityID, s.Name AS StaffName, f.FacilityName, a.AccessDate, a.AccessTime FROM FACILITY_ACCESS a JOIN STAFF s ON s.StaffID=a.StaffID JOIN STAFF_FACILITY f ON f.FacilityID=a.FacilityID ORDER BY a.AccessDate DESC, a.AccessTime DESC",
+        "query": sql_queries.MODULE_QUERIES["access"],
         "search": ["StaffName", "FacilityName"],
     },
     "bookings": {
@@ -133,7 +140,7 @@ MODULES = {
             ("BookingStatus", "Status", "select:PENDING|CONFIRMED", True),
         ],
         "columns": [("BookingID", "ID"), ("StaffName", "Staff"), ("FacilityName", "Facility"), ("BookingDate", "Date"), ("StartTime", "Start"), ("EndTime", "End"), ("BookingStatus", "Status")],
-        "query": "SELECT b.BookingID, b.StaffID, b.FacilityID, s.Name AS StaffName, f.FacilityName, b.BookingDate, b.StartTime, b.EndTime, b.BookingStatus, CASE WHEN (b.BookingDate<CURRENT_DATE() OR (b.BookingDate=CURRENT_DATE() AND b.EndTime<CURRENT_TIME())) THEN 1 ELSE 0 END AS IsCompletable FROM FACILITY_BOOKING b JOIN STAFF s ON s.StaffID=b.StaffID JOIN STAFF_FACILITY f ON f.FacilityID=b.FacilityID ORDER BY b.BookingDate DESC, b.StartTime",
+        "query": sql_queries.MODULE_QUERIES["bookings"],
         "search": ["StaffName", "FacilityName", "BookingStatus"],
     },
     "parking": {
@@ -151,7 +158,7 @@ MODULES = {
             ("ValidUntil", "Valid until", "date", False),
         ],
         "columns": [("ParkingID", "ID"), ("StaffName", "Staff"), ("VehicleNumber", "Vehicle"), ("VehicleType", "Type"), ("ParkingArea", "Area"), ("ParkingSlot", "Slot"), ("ValidFrom", "From"), ("ValidUntil", "Until"), ("AllocationStatus", "Status")],
-        "query": "SELECT p.ParkingID, p.StaffID, s.Name AS StaffName, p.VehicleNumber, p.VehicleType, p.ParkingArea, p.ParkingSlot, p.ValidFrom, p.ValidUntil, p.AllocationStatus FROM STAFF_PARKING p JOIN STAFF s ON s.StaffID=p.StaffID ORDER BY p.ParkingID DESC",
+        "query": sql_queries.MODULE_QUERIES["parking"],
         "search": ["StaffName", "VehicleNumber", "ParkingArea", "ParkingSlot"],
     },
     "lockers": {
@@ -165,7 +172,7 @@ MODULES = {
             ("LockerType", "Locker type", "select:STANDARD|LARGE|SECURE", True),
         ],
         "columns": [("LockerID", "ID"), ("LockerNumber", "Locker"), ("Location", "Location"), ("LockerType", "Type"), ("Status", "Status")],
-        "query": "SELECT LockerID, LockerNumber, Location, LockerType, Status FROM LOCKER ORDER BY Location, LockerNumber",
+        "query": sql_queries.MODULE_QUERIES["lockers"],
         "search": ["LockerNumber", "Location", "LockerType", "Status"],
     },
     "locker-allocations": {
@@ -179,7 +186,7 @@ MODULES = {
             ("AllocationDate", "Allocation date", "date", True),
         ],
         "columns": [("AllocationID", "ID"), ("LockerNumber", "Locker"), ("StaffName", "Staff"), ("AllocationDate", "Allocated"), ("ReturnDate", "Returned"), ("Status", "Status")],
-        "query": "SELECT a.AllocationID, a.LockerID, a.StaffID, l.LockerNumber, s.Name AS StaffName, a.AllocationDate, a.ReturnDate, a.Status FROM LOCKER_ALLOCATION a JOIN LOCKER l ON l.LockerID=a.LockerID JOIN STAFF s ON s.StaffID=a.StaffID ORDER BY a.AllocationID DESC",
+        "query": sql_queries.MODULE_QUERIES["locker-allocations"],
         "search": ["LockerNumber", "StaffName", "Status"],
     },
     "training-rooms": {
@@ -194,7 +201,7 @@ MODULES = {
             ("EquipmentAvailable", "Equipment", "text", False),
         ],
         "columns": [("TrainingRoomID", "ID"), ("RoomNumber", "Room"), ("FacilityName", "Facility"), ("Location", "Location"), ("Capacity", "Capacity"), ("EquipmentAvailable", "Equipment")],
-        "query": "SELECT t.TrainingRoomID, t.FacilityID, t.RoomNumber, f.FacilityName, f.Location, t.Capacity, t.EquipmentAvailable FROM TRAINING_ROOM t JOIN STAFF_FACILITY f ON f.FacilityID=t.FacilityID ORDER BY t.RoomNumber",
+        "query": sql_queries.MODULE_QUERIES["training-rooms"],
         "search": ["RoomNumber", "FacilityName", "Location"],
     },
     "cafeterias": {
@@ -209,7 +216,7 @@ MODULES = {
             ("Capacity", "Capacity", "number", True),
         ],
         "columns": [("CafeteriaID", "ID"), ("CafeteriaName", "Cafeteria"), ("FacilityName", "Facility"), ("Location", "Location"), ("Capacity", "Capacity")],
-        "query": "SELECT c.CafeteriaID, c.FacilityID, c.CafeteriaName, f.FacilityName, c.Location, c.Capacity FROM CAFETERIA c JOIN STAFF_FACILITY f ON f.FacilityID=c.FacilityID ORDER BY c.CafeteriaName",
+        "query": sql_queries.MODULE_QUERIES["cafeterias"],
         "search": ["CafeteriaName", "FacilityName", "Location"],
     },
     "meals": {
@@ -225,20 +232,10 @@ MODULES = {
             ("EndTime", "End time", "time", True),
         ],
         "columns": [("MealID", "ID"), ("CafeteriaName", "Cafeteria"), ("MealType", "Meal"), ("MealDate", "Date"), ("StartTime", "Start"), ("EndTime", "End")],
-        "query": "SELECT m.MealID, m.CafeteriaID, c.CafeteriaName, m.MealType, m.MealDate, m.StartTime, m.EndTime FROM MEAL_SCHEDULE m JOIN CAFETERIA c ON c.CafeteriaID=m.CafeteriaID ORDER BY m.MealDate DESC, m.StartTime",
+        "query": sql_queries.MODULE_QUERIES["meals"],
         "search": ["CafeteriaName", "MealType"],
     },
 }
-
-REFERENCE_QUERIES = {
-    "staff": ("SELECT StaffID AS id, CONCAT(Name, ' · ', Department) AS label FROM STAFF ORDER BY Name",),
-    "facility": ("SELECT FacilityID AS id, FacilityName AS label FROM STAFF_FACILITY ORDER BY FacilityName",),
-    "locker": ("SELECT LockerID AS id, CONCAT(LockerNumber, ' — ', Location) AS label FROM LOCKER WHERE Status='AVAILABLE' ORDER BY Location, LockerNumber",),
-    "training-facility": ("SELECT FacilityID AS id, FacilityName AS label FROM STAFF_FACILITY WHERE FacilityType='TRAINING_ROOM' ORDER BY FacilityName",),
-    "cafeteria-facility": ("SELECT FacilityID AS id, FacilityName AS label FROM STAFF_FACILITY WHERE FacilityType='CAFETERIA' ORDER BY FacilityName",),
-    "cafeteria": ("SELECT CafeteriaID AS id, CafeteriaName AS label FROM CAFETERIA ORDER BY CafeteriaName",),
-}
-
 
 @contextmanager
 def db_connection():
@@ -272,7 +269,7 @@ def insert_locker_allocation(values):
         try:
             connection.start_transaction()
             cursor.execute(
-                "SELECT Status FROM LOCKER WHERE LockerID=%s FOR UPDATE",
+                sql_queries.LOCKER_STATUS_FOR_UPDATE,
                 (values["LockerID"],),
             )
             locker = cursor.fetchone()
@@ -281,11 +278,12 @@ def insert_locker_allocation(values):
             if locker[0] != "AVAILABLE":
                 raise ValueError("That locker is no longer available.")
             cursor.execute(
-                """INSERT INTO LOCKER_ALLOCATION (LockerID, StaffID, AllocationDate)
-                   VALUES (%s, %s, %s)""",
+                sql_queries.LOCKER_ALLOCATION_INSERT,
                 (values["LockerID"], values["StaffID"], values["AllocationDate"]),
             )
+            allocation_id = cursor.lastrowid
             connection.commit()
+            return allocation_id
         except Exception:
             connection.rollback()
             raise
@@ -298,13 +296,194 @@ def fetch_one(sql, params=()):
     return rows[0] if rows else None
 
 
-def run_write(sql, params=()):
+def mongo_activity_collection():
+    global mongo_client
+
+    uri = os.getenv("MONGODB_URI", "").strip()
+    if not uri:
+        return None
+    if mongo_client is None:
+        mongo_client = MongoClient(uri, serverSelectionTimeoutMS=1500, connectTimeoutMS=1500)
+    mongo_client.admin.command("ping")
+    database = os.getenv("MONGODB_DATABASE", "airport_staff_facilities")
+    collection = os.getenv("MONGODB_COLLECTION", "activity_logs")
+    return mongo_client[database][collection]
+
+
+def mongo_records_collection():
+    global mongo_client
+
+    uri = os.getenv("MONGODB_URI", "").strip()
+    if not uri:
+        return None
+    if mongo_client is None:
+        mongo_client = MongoClient(uri, serverSelectionTimeoutMS=1500, connectTimeoutMS=1500)
+    mongo_client.admin.command("ping")
+    database = os.getenv("MONGODB_DATABASE", "airport_staff_facilities")
+    collection = os.getenv("MONGODB_RECORDS_COLLECTION", "management_records")
+    return mongo_client[database][collection]
+
+
+def mongo_record_value(value):
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        sign = "-" if total_seconds < 0 else ""
+        hours, remainder = divmod(abs(total_seconds), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{sign}{hours:02d}:{minutes:02d}:{seconds:02d}"
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
+
+
+def sync_mongo_record(slug, record_id, deleted=False):
+    if not os.getenv("MONGODB_URI", "").strip():
+        return "MongoDB is not configured, so this record could not be mirrored; the MySQL change was saved."
+    try:
+        collection = mongo_records_collection()
+        document_id = f"{slug}:{record_id}"
+        if deleted:
+            collection.delete_one({"_id": document_id})
+            return None
+        module = MODULES[slug]
+        row = fetch_one(
+            sql_queries.record_by_id_statement(module["table"], module["pk"]),
+            (record_id,),
+        )
+        if row is None:
+            collection.delete_one({"_id": document_id})
+            return None
+        document = {
+            "_id": document_id,
+            "module": slug,
+            "table": module["table"],
+            "record_id": record_id,
+            "synced_at": datetime.now(timezone.utc),
+        }
+        document.update({key: mongo_record_value(value) for key, value in row.items()})
+        collection.replace_one({"_id": document_id}, document, upsert=True)
+    except (MySQLError, PyMongoError, TypeError, ValueError):
+        logger.exception("Could not mirror the %s record to MongoDB", slug)
+        return "The MySQL change was saved, but MongoDB could not mirror the record. Check MONGODB_URI and the MongoDB connection."
+    return None
+
+
+def activity_log_file():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "activity_audit.log")
+
+
+def append_activity_file(event):
+    line = "\t".join((
+        event["created_at"].isoformat(),
+        str(event["operation"]).replace("\t", " "),
+        str(event["module"]).replace("\t", " "),
+        str(event["record_id"] if event["record_id"] is not None else ""),
+    ))
+    with activity_file_lock:
+        with open(activity_log_file(), "a", encoding="utf-8", newline="") as activity_file:
+            if activity_file.tell() == 0:
+                activity_file.write("timestamp_utc\toperation\tmodule\trecord_id\n")
+            activity_file.write(line + "\n")
+
+
+def read_activity_file(limit):
+    path = activity_log_file()
+    if not os.path.exists(path):
+        return []
+    with activity_file_lock:
+        with open(path, encoding="utf-8") as activity_file:
+            lines = activity_file.readlines()[-1000:]
+    events = []
+    for line in lines:
+        line = line.rstrip("\r\n")
+        if not line or line.startswith("timestamp_utc\t"):
+            continue
+        created_at, operation, module, record_id = line.split("\t", 3)
+        events.append({
+            "created_at": datetime.fromisoformat(created_at),
+            "operation": operation,
+            "module": module,
+            "record_id": int(record_id) if record_id else None,
+        })
+    return sorted(events, key=lambda event: event["created_at"], reverse=True)[:limit]
+
+
+def record_activity(operation, module, record_id):
+    event = {
+        "operation": operation,
+        "module": module,
+        "record_id": record_id,
+        "created_at": datetime.now(timezone.utc),
+    }
+    warnings = []
+    try:
+        append_activity_file(event)
+    except OSError:
+        logger.exception("Could not append activity event to the local audit file")
+        warnings.append("The MySQL change was saved, but the local activity audit file could not be written.")
+    try:
+        collection = mongo_activity_collection()
+        if collection is not None:
+            collection.insert_one(event)
+    except PyMongoError:
+        logger.exception("Could not write activity event to MongoDB")
+        warnings.append("The MySQL change and local audit file were saved, but MongoDB could not record the activity. Check MONGODB_URI and the Atlas connection.")
+    return " ".join(warnings) or None
+
+
+def record_successful_change(operation, slug, record_id, deleted=False, related_records=()):
+    warnings = []
+    warning = sync_mongo_record(slug, record_id, deleted=deleted)
+    if warning:
+        warnings.append(warning)
+    for related_slug, related_id in related_records:
+        warning = sync_mongo_record(related_slug, related_id)
+        if warning:
+            warnings.append(warning)
+    warning = record_activity(operation, MODULES[slug]["title"], record_id)
+    if warning:
+        warnings.append(warning)
+    return " ".join(dict.fromkeys(warnings)) or None
+
+
+def fetch_recent_activity(limit=8):
+    if not os.getenv("MONGODB_URI", "").strip():
+        try:
+            return read_activity_file(limit), "File log (MongoDB not configured)"
+        except (OSError, ValueError):
+            logger.exception("Could not read the local activity audit file")
+            return [], "File log unavailable"
+    try:
+        collection = mongo_activity_collection()
+        events = list(
+            collection.find(
+                {},
+                {"_id": 0, "operation": 1, "module": 1, "record_id": 1, "created_at": 1},
+            )
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+    except PyMongoError:
+        logger.exception("Could not read activity events from MongoDB")
+        try:
+            return read_activity_file(limit), "File log (MongoDB unavailable)"
+        except (OSError, ValueError):
+            logger.exception("Could not read the local activity audit file")
+            return [], "MongoDB and file log unavailable"
+    return events, "Connected"
+
+
+def run_write(sql, params=(), return_id=False):
     with db_connection() as connection:
         cursor = connection.cursor()
         try:
             cursor.execute(sql, params)
             connection.commit()
-            return cursor.rowcount
+            return cursor.lastrowid if return_id else cursor.rowcount
         except Exception:
             connection.rollback()
             raise
@@ -402,7 +581,7 @@ def reference_options(fields):
     for _, _, kind, _ in fields:
         if kind.startswith("ref:"):
             ref_name = kind.split(":", 1)[1]
-            options[ref_name] = fetch_all(*REFERENCE_QUERIES[ref_name])
+            options[ref_name] = fetch_all(sql_queries.REFERENCE_QUERIES[ref_name])
     return options
 
 
@@ -429,27 +608,22 @@ def protect_post_requests():
 @app.get("/")
 @database_errors
 def dashboard():
-    stats = fetch_one(
-        """SELECT
-            (SELECT COUNT(*) FROM STAFF) AS total_staff,
-            (SELECT COUNT(*) FROM STAFF WHERE StaffStatus='ACTIVE') AS active_staff,
-            (SELECT COUNT(*) FROM STAFF_FACILITY) AS total_facilities,
-            (SELECT COUNT(*) FROM STAFF_FACILITY WHERE AvailabilityStatus='AVAILABLE') AS available_facilities,
-            (SELECT COUNT(*) FROM FACILITY_BOOKING) AS total_bookings,
-            (SELECT COUNT(*) FROM FACILITY_BOOKING WHERE BookingStatus='CONFIRMED') AS confirmed_bookings,
-            (SELECT COUNT(*) FROM LOCKER WHERE Status='AVAILABLE') AS available_lockers,
-            (SELECT COUNT(*) FROM LOCKER WHERE Status='ALLOCATED') AS allocated_lockers,
-            (SELECT COUNT(*) FROM STAFF_PARKING WHERE AllocationStatus='ACTIVE') AS active_parking,
-            (SELECT COUNT(*) FROM MEAL_SCHEDULE) AS meal_schedules"""
-    )
-    staff = fetch_all("SELECT Department AS label, COUNT(*) AS value FROM STAFF GROUP BY Department ORDER BY value DESC")
-    facility = fetch_all("SELECT FacilityType AS label, COUNT(*) AS value FROM STAFF_FACILITY GROUP BY FacilityType ORDER BY value DESC")
-    booking = fetch_all("SELECT BookingStatus AS label, COUNT(*) AS value FROM FACILITY_BOOKING GROUP BY BookingStatus ORDER BY BookingStatus")
-    access = fetch_all("SELECT f.FacilityName AS label, COUNT(a.AccessID) AS value FROM STAFF_FACILITY f LEFT JOIN FACILITY_ACCESS a ON a.FacilityID=f.FacilityID GROUP BY f.FacilityID, f.FacilityName ORDER BY value DESC LIMIT 8")
-    recent_bookings = fetch_all("SELECT b.BookingID, s.Name AS StaffName, f.FacilityName, b.BookingDate, b.StartTime, b.BookingStatus FROM FACILITY_BOOKING b JOIN STAFF s ON s.StaffID=b.StaffID JOIN STAFF_FACILITY f ON f.FacilityID=b.FacilityID ORDER BY b.BookingDate DESC, b.StartTime DESC LIMIT 6")
+    stats = fetch_one(sql_queries.DASHBOARD_STATS)
+    staff = fetch_all(sql_queries.DASHBOARD_STAFF)
+    facility = fetch_all(sql_queries.DASHBOARD_FACILITIES)
+    booking = fetch_all(sql_queries.DASHBOARD_BOOKINGS)
+    access = fetch_all(sql_queries.DASHBOARD_ACCESS)
+    recent_bookings = fetch_all(sql_queries.DASHBOARD_RECENT_BOOKINGS)
+    recent_activity, mongo_status = fetch_recent_activity(5)
     return render_template("dashboard.html", stats=stats, today=date.today().strftime("%A, %d %B %Y"), charts={
         "staff": staff, "facility": facility, "booking": booking, "access": access,
-    }, recent_bookings=recent_bookings)
+    }, recent_bookings=recent_bookings, recent_activity=recent_activity, mongo_status=mongo_status)
+
+
+@app.get("/activity")
+def activity_page():
+    events, mongo_status = fetch_recent_activity(50)
+    return render_template("activity.html", events=events, mongo_status=mongo_status)
 
 
 @app.get("/<slug>")
@@ -462,9 +636,8 @@ def module_page(slug):
     params = ()
     sql = module["query"]
     if search:
-        clauses = [f"{column} LIKE %s" for column in module["search"]]
-        sql = f"SELECT * FROM ({sql.rstrip(';')}) AS results WHERE " + " OR ".join(clauses)
-        params = tuple(f"%{search}%" for _ in clauses)
+        sql = sql_queries.search_statement(sql, module["search"])
+        params = tuple(f"%{search}%" for _ in module["search"])
     rows = fetch_all(sql, params)
     options = reference_options(module["fields"])
     return render_template("module.html", slug=slug, module=module, rows=rows, options=options, search=search)
@@ -473,7 +646,7 @@ def module_page(slug):
 @app.get("/staff/<int:staff_id>")
 @database_errors
 def staff_detail(staff_id):
-    staff = fetch_one("SELECT * FROM STAFF WHERE StaffID=%s", (staff_id,))
+    staff = fetch_one(sql_queries.STAFF_BY_ID, (staff_id,))
     if not staff:
         abort(404)
     history = [
@@ -481,10 +654,7 @@ def staff_detail(staff_id):
             "title": "Facility bookings",
             "columns": ["Facility", "Date", "Start", "End", "Status"],
             "rows": fetch_all(
-                """SELECT f.FacilityName AS Facility, b.BookingDate AS Date,
-                          b.StartTime AS Start, b.EndTime AS End, b.BookingStatus AS Status
-                   FROM FACILITY_BOOKING b JOIN STAFF_FACILITY f ON f.FacilityID=b.FacilityID
-                   WHERE b.StaffID=%s ORDER BY b.BookingDate DESC, b.StartTime DESC""",
+                sql_queries.STAFF_BOOKING_HISTORY,
                 (staff_id,),
             ),
         },
@@ -492,9 +662,7 @@ def staff_detail(staff_id):
             "title": "Facility access history",
             "columns": ["Facility", "Date", "Time"],
             "rows": fetch_all(
-                """SELECT f.FacilityName AS Facility, a.AccessDate AS Date, a.AccessTime AS Time
-                   FROM FACILITY_ACCESS a JOIN STAFF_FACILITY f ON f.FacilityID=a.FacilityID
-                   WHERE a.StaffID=%s ORDER BY a.AccessDate DESC, a.AccessTime DESC""",
+                sql_queries.STAFF_ACCESS_HISTORY,
                 (staff_id,),
             ),
         },
@@ -502,9 +670,7 @@ def staff_detail(staff_id):
             "title": "Parking records",
             "columns": ["Vehicle", "Area", "Slot", "From", "Until", "Status"],
             "rows": fetch_all(
-                """SELECT VehicleNumber AS Vehicle, ParkingArea AS Area, ParkingSlot AS Slot,
-                          ValidFrom AS `From`, ValidUntil AS Until, AllocationStatus AS Status
-                   FROM STAFF_PARKING WHERE StaffID=%s ORDER BY ValidFrom DESC""",
+                sql_queries.STAFF_PARKING_HISTORY,
                 (staff_id,),
             ),
         },
@@ -512,10 +678,7 @@ def staff_detail(staff_id):
             "title": "Locker allocations",
             "columns": ["Locker", "Location", "Allocated", "Returned", "Status"],
             "rows": fetch_all(
-                """SELECT l.LockerNumber AS Locker, l.Location AS Location,
-                          a.AllocationDate AS Allocated, a.ReturnDate AS Returned, a.Status AS Status
-                   FROM LOCKER_ALLOCATION a JOIN LOCKER l ON l.LockerID=a.LockerID
-                   WHERE a.StaffID=%s ORDER BY a.AllocationDate DESC""",
+                sql_queries.STAFF_LOCKER_HISTORY,
                 (staff_id,),
             ),
         },
@@ -526,7 +689,7 @@ def staff_detail(staff_id):
 @app.get("/facilities/<int:facility_id>")
 @database_errors
 def facility_detail(facility_id):
-    facility = fetch_one("SELECT * FROM STAFF_FACILITY WHERE FacilityID=%s", (facility_id,))
+    facility = fetch_one(sql_queries.FACILITY_BY_ID, (facility_id,))
     if not facility:
         abort(404)
     history = [
@@ -534,10 +697,7 @@ def facility_detail(facility_id):
             "title": "Facility bookings",
             "columns": ["Staff", "Date", "Start", "End", "Status"],
             "rows": fetch_all(
-                """SELECT s.Name AS Staff, b.BookingDate AS Date, b.StartTime AS Start,
-                          b.EndTime AS End, b.BookingStatus AS Status
-                   FROM FACILITY_BOOKING b JOIN STAFF s ON s.StaffID=b.StaffID
-                   WHERE b.FacilityID=%s ORDER BY b.BookingDate DESC, b.StartTime DESC""",
+                sql_queries.FACILITY_BOOKING_HISTORY,
                 (facility_id,),
             ),
         },
@@ -545,10 +705,7 @@ def facility_detail(facility_id):
             "title": "Access history",
             "columns": ["Staff", "Department", "Date", "Time"],
             "rows": fetch_all(
-                """SELECT s.Name AS Staff, s.Department AS Department,
-                          a.AccessDate AS Date, a.AccessTime AS Time
-                   FROM FACILITY_ACCESS a JOIN STAFF s ON s.StaffID=a.StaffID
-                   WHERE a.FacilityID=%s ORDER BY a.AccessDate DESC, a.AccessTime DESC""",
+                sql_queries.FACILITY_ACCESS_HISTORY,
                 (facility_id,),
             ),
         },
@@ -565,17 +722,28 @@ def add_record(slug):
     try:
         values = parse_form(module["fields"])
         if slug == "bookings":
-            insert_booking(values)
+            record_id = insert_booking(values)
         elif slug == "locker-allocations":
-            insert_locker_allocation(values)
+            record_id = insert_locker_allocation(values)
         else:
             columns = list(values)
-            placeholders = ", ".join(["%s"] * len(columns))
-            run_write(
-                f"INSERT INTO {module['table']} ({', '.join(columns)}) VALUES ({placeholders})",
+            record_id = run_write(
+                sql_queries.insert_statement(module["table"], columns),
                 tuple(values[column] for column in columns),
+                return_id=True,
             )
         flash(f"{module['title'].rstrip('s')} added successfully.", "success")
+        related_records = ()
+        if slug == "locker-allocations":
+            related_records = (("lockers", values["LockerID"]),)
+        warning = record_successful_change(
+            "created",
+            slug,
+            record_id,
+            related_records=related_records,
+        )
+        if warning:
+            flash(warning, "warning")
     except ValueError as exc:
         flash(str(exc), "danger")
     except MySQLError:
@@ -589,7 +757,7 @@ def insert_booking(values):
         try:
             connection.start_transaction()
             cursor.execute(
-                "SELECT FacilityID, AvailabilityStatus FROM STAFF_FACILITY WHERE FacilityID=%s FOR UPDATE",
+                sql_queries.BOOKING_FACILITY_FOR_UPDATE,
                 (values["FacilityID"],),
             )
             facility = cursor.fetchone()
@@ -599,20 +767,19 @@ def insert_booking(values):
                 raise ValueError("The selected facility is currently unavailable.")
             if values["BookingStatus"] == "CONFIRMED":
                 cursor.execute(
-                    """SELECT BookingID FROM FACILITY_BOOKING
-                       WHERE FacilityID=%s AND BookingDate=%s AND BookingStatus='CONFIRMED'
-                         AND StartTime < %s AND EndTime > %s
-                       FOR UPDATE""",
+                    sql_queries.BOOKING_CONFLICT_CHECK,
                     (values["FacilityID"], values["BookingDate"], values["EndTime"], values["StartTime"]),
                 )
                 if cursor.fetchone():
                     raise ValueError("This time conflicts with an existing confirmed booking.")
             columns = list(values)
             cursor.execute(
-                f"INSERT INTO FACILITY_BOOKING ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})",
+                sql_queries.insert_statement("FACILITY_BOOKING", columns),
                 tuple(values[column] for column in columns),
             )
+            booking_id = cursor.lastrowid
             connection.commit()
+            return booking_id
         except Exception:
             connection.rollback()
             raise
@@ -626,7 +793,10 @@ def edit_record(slug, record_id):
     if slug not in MODULES or slug in {"access", "bookings", "locker-allocations"}:
         abort(404)
     module = MODULES[slug]
-    row = fetch_one(f"SELECT * FROM {module['table']} WHERE {module['pk']}=%s", (record_id,))
+    row = fetch_one(
+        sql_queries.record_by_id_statement(module["table"], module["pk"]),
+        (record_id,),
+    )
     if row is None:
         flash("That record no longer exists.", "warning")
         return redirect(url_for("module_page", slug=slug))
@@ -641,12 +811,17 @@ def update_record(slug, record_id):
     module = MODULES[slug]
     try:
         values = parse_form(module["fields"])
-        assignments = ", ".join(f"{column}=%s" for column in values)
-        run_write(
-            f"UPDATE {module['table']} SET {assignments} WHERE {module['pk']}=%s",
+        affected = run_write(
+            sql_queries.update_statement(module["table"], list(values), module["pk"]),
             tuple(values.values()) + (record_id,),
         )
-        flash("Record updated successfully.", "success")
+        if affected:
+            flash("Record updated successfully.", "success")
+            warning = record_successful_change("updated", slug, record_id)
+            if warning:
+                flash(warning, "warning")
+        else:
+            flash("No change was made to this record.", "warning")
     except ValueError as exc:
         flash(str(exc), "danger")
         return redirect(url_for("edit_record", slug=slug, record_id=record_id))
@@ -657,50 +832,53 @@ def update_record(slug, record_id):
 @database_errors
 def record_action(slug, record_id, action):
     allowed = {
-        ("staff", "deactivate"): ("UPDATE STAFF SET StaffStatus='INACTIVE' WHERE StaffID=%s", "Staff member deactivated."),
-        ("bookings", "cancel"): ("UPDATE FACILITY_BOOKING SET BookingStatus='CANCELLED' WHERE BookingID=%s AND BookingStatus IN ('PENDING','CONFIRMED')", "Booking cancelled."),
-        ("bookings", "complete"): ("UPDATE FACILITY_BOOKING SET BookingStatus='COMPLETED' WHERE BookingID=%s AND BookingStatus='CONFIRMED' AND (BookingDate<CURRENT_DATE() OR (BookingDate=CURRENT_DATE() AND EndTime<CURRENT_TIME()))", "Booking marked completed."),
-        ("parking", "release"): ("UPDATE STAFF_PARKING SET AllocationStatus='RELEASED', ValidUntil=COALESCE(ValidUntil,GREATEST(ValidFrom,CURRENT_DATE())) WHERE ParkingID=%s AND AllocationStatus='ACTIVE'", "Parking allocation released."),
-        ("locker-allocations", "return"): ("UPDATE LOCKER_ALLOCATION SET Status='RETURNED', ReturnDate=CURRENT_DATE() WHERE AllocationID=%s AND Status='ACTIVE'", "Locker returned."),
-        ("lockers", "unavailable"): ("UPDATE LOCKER SET Status='UNAVAILABLE' WHERE LockerID=%s AND Status='AVAILABLE'", "Locker marked unavailable."),
-        ("lockers", "available"): ("UPDATE LOCKER SET Status='AVAILABLE' WHERE LockerID=%s AND Status='UNAVAILABLE'", "Locker marked available."),
-        ("meals", "delete"): ("DELETE FROM MEAL_SCHEDULE WHERE MealID=%s", "Meal schedule deleted."),
+        ("staff", "deactivate"): (sql_queries.ACTION_QUERIES[("staff", "deactivate")], "Staff member deactivated."),
+        ("bookings", "cancel"): (sql_queries.ACTION_QUERIES[("bookings", "cancel")], "Booking cancelled."),
+        ("bookings", "complete"): (sql_queries.ACTION_QUERIES[("bookings", "complete")], "Booking marked completed."),
+        ("parking", "release"): (sql_queries.ACTION_QUERIES[("parking", "release")], "Parking allocation released."),
+        ("locker-allocations", "return"): (sql_queries.ACTION_QUERIES[("locker-allocations", "return")], "Locker returned."),
+        ("lockers", "unavailable"): (sql_queries.ACTION_QUERIES[("lockers", "unavailable")], "Locker marked unavailable."),
+        ("lockers", "available"): (sql_queries.ACTION_QUERIES[("lockers", "available")], "Locker marked available."),
+        ("meals", "delete"): (sql_queries.ACTION_QUERIES[("meals", "delete")], "Meal schedule deleted."),
     }
     entry = allowed.get((slug, action))
     if not entry:
         abort(404)
+    related_records = ()
+    if slug == "locker-allocations" and action == "return":
+        allocation = fetch_one(
+            sql_queries.record_by_id_statement(
+                MODULES[slug]["table"],
+                MODULES[slug]["pk"],
+            ),
+            (record_id,),
+        )
+        if allocation:
+            related_records = (("lockers", allocation["LockerID"]),)
     affected = run_write(entry[0], (record_id,))
     if affected:
         flash(entry[1], "success")
+        operation = "deleted" if action == "delete" else action
+        warning = record_successful_change(
+            operation,
+            slug,
+            record_id,
+            deleted=action == "delete",
+            related_records=related_records,
+        )
+        if warning:
+            flash(warning, "warning")
     else:
         flash("No change was made. This record may no longer be eligible for that action.", "warning")
     return redirect(url_for("module_page", slug=slug))
-
-
-REPORTS = [
-    ("Staff by department", "SELECT Department AS `Department`, COUNT(*) AS `Staff` FROM STAFF GROUP BY Department ORDER BY COUNT(*) DESC"),
-    ("Staff by shift", "SELECT Shift AS `Shift`, COUNT(*) AS `Staff` FROM STAFF GROUP BY Shift ORDER BY Shift"),
-    ("Facilities by type", "SELECT FacilityType AS `Facility type`, COUNT(*) AS `Facilities` FROM STAFF_FACILITY GROUP BY FacilityType ORDER BY FacilityType"),
-    ("Facility access counts", "SELECT f.FacilityName AS `Facility`, COUNT(a.AccessID) AS `Access events` FROM STAFF_FACILITY f LEFT JOIN FACILITY_ACCESS a ON a.FacilityID=f.FacilityID GROUP BY f.FacilityID, f.FacilityName ORDER BY COUNT(a.AccessID) DESC"),
-    ("Bookings by status", "SELECT BookingStatus AS `Status`, COUNT(*) AS `Bookings` FROM FACILITY_BOOKING GROUP BY BookingStatus ORDER BY BookingStatus"),
-    ("Staff booking history", "SELECT s.Name AS `Staff`, f.FacilityName AS `Facility`, b.BookingDate AS `Date`, b.StartTime AS `Start`, b.EndTime AS `End`, b.BookingStatus AS `Status` FROM FACILITY_BOOKING b JOIN STAFF s ON s.StaffID=b.StaffID JOIN STAFF_FACILITY f ON f.FacilityID=b.FacilityID ORDER BY b.BookingDate DESC"),
-    ("Locker inventory and allocation history", "SELECT l.LockerNumber AS `Locker`, l.Location AS `Location`, l.Status AS `Locker status`, s.Name AS `Staff`, a.AllocationDate AS `Allocated`, a.ReturnDate AS `Returned`, a.Status AS `Allocation status` FROM LOCKER l LEFT JOIN LOCKER_ALLOCATION a ON a.LockerID=l.LockerID LEFT JOIN STAFF s ON s.StaffID=a.StaffID ORDER BY l.Location, l.LockerNumber"),
-    ("Active parking by area", "SELECT ParkingArea AS `Area`, COUNT(*) AS `Active allocations` FROM STAFF_PARKING WHERE AllocationStatus='ACTIVE' GROUP BY ParkingArea ORDER BY COUNT(*) DESC"),
-    ("Cafeteria meal schedules", "SELECT c.CafeteriaName AS `Cafeteria`, m.MealType AS `Meal`, m.MealDate AS `Date`, m.StartTime AS `Start`, m.EndTime AS `End` FROM MEAL_SCHEDULE m JOIN CAFETERIA c ON c.CafeteriaID=m.CafeteriaID ORDER BY m.MealDate DESC, m.StartTime"),
-    ("Booking utilization by facility", "SELECT f.FacilityName AS `Facility`, COUNT(b.BookingID) AS `Bookings`, SUM(CASE WHEN b.BookingStatus='CONFIRMED' THEN 1 ELSE 0 END) AS `Confirmed` FROM STAFF_FACILITY f LEFT JOIN FACILITY_BOOKING b ON b.FacilityID=f.FacilityID GROUP BY f.FacilityID, f.FacilityName ORDER BY COUNT(b.BookingID) DESC"),
-    ("Staff with no bookings", "SELECT s.StaffID AS `Staff ID`, s.Name AS `Staff`, s.Department AS `Department` FROM STAFF s WHERE NOT EXISTS (SELECT 1 FROM FACILITY_BOOKING b WHERE b.StaffID=s.StaffID) ORDER BY s.Name"),
-    ("Facilities without access events", "SELECT f.FacilityID AS `Facility ID`, f.FacilityName AS `Facility`, f.Location AS `Location` FROM STAFF_FACILITY f WHERE NOT EXISTS (SELECT 1 FROM FACILITY_ACCESS a WHERE a.FacilityID=f.FacilityID) ORDER BY f.FacilityName"),
-    ("Staff with multiple active lockers", "SELECT s.StaffID AS `Staff ID`, s.Name AS `Staff`, COUNT(*) AS `Active lockers` FROM LOCKER_ALLOCATION a JOIN STAFF s ON s.StaffID=a.StaffID WHERE a.Status='ACTIVE' GROUP BY s.StaffID, s.Name HAVING COUNT(*)>1 ORDER BY COUNT(*) DESC"),
-    ("Potential allocation conflicts", "SELECT 'Locker' AS `Resource`, l.LockerNumber AS `Item`, COUNT(*) AS `Active allocations` FROM LOCKER_ALLOCATION a JOIN LOCKER l ON l.LockerID=a.LockerID WHERE a.Status='ACTIVE' GROUP BY l.LockerID, l.LockerNumber HAVING COUNT(*)>1 UNION ALL SELECT 'Parking slot', CONCAT(ParkingArea, ' / ', ParkingSlot), COUNT(*) FROM STAFF_PARKING WHERE AllocationStatus='ACTIVE' GROUP BY ParkingArea, ParkingSlot HAVING COUNT(*)>1"),
-]
 
 
 @app.get("/reports")
 @database_errors
 def reports():
     report_data = []
-    for title, sql in REPORTS:
-        rows = fetch_all(sql)
+    for title, query in sql_queries.REPORTS:
+        rows = fetch_all(query)
         report_data.append({"title": title, "columns": list(rows[0].keys()) if rows else [], "rows": rows})
     return render_template("reports.html", reports=report_data)
 

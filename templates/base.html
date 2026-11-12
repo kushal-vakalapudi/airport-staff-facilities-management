@@ -30,10 +30,13 @@
         <a class="side-link {% if request.endpoint == 'reports' %}active{% endif %}" href="{{ url_for('reports') }}">
           <i class="bi bi-bar-chart-line-fill"></i><span>Reports</span>
         </a>
+        <a class="side-link {% if request.endpoint == 'activity_page' %}active{% endif %}" href="{{ url_for('activity_page') }}">
+          <i class="bi bi-journal-text"></i><span>Activity log</span>
+        </a>
       </nav>
       <div class="sidebar-note">
         <i class="bi bi-database-check"></i>
-        <div><strong>Live database</strong><small>MySQL connection</small></div>
+        <div><strong>Database stores</strong><small>MySQL + MongoDB activity</small></div>
       </div>
     </aside>
 

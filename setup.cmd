@@ -34,7 +34,8 @@ if not exist ".env" (
         pause
         exit /b 1
     )
-    echo Created .env. Edit it now and enter your MySQL username and password.
+    echo Created .env. Edit it now and enter your MySQL credentials.
+    echo MongoDB is optional; successful changes are also written to activity_audit.log.
 ) else (
     echo Existing .env found; it was not overwritten.
 )
@@ -43,5 +44,6 @@ echo.
 echo Setup complete.
 echo Next: edit .env, then double-click run.cmd.
 echo Database: airport_staff_facilities_db
+echo Activity audit file: activity_audit.log in this project folder.
 echo This setup does not create, drop, or modify database tables or records.
 pause
